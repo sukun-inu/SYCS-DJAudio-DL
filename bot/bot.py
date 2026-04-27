@@ -7,10 +7,10 @@ Discord YT-DLP Bot（マルチサーバー対応版）
 """
 
 import os
-import re
 import json
 import asyncio
 import logging
+import re
 import tempfile
 from pathlib import Path
 
@@ -84,6 +84,105 @@ async def can_download(url: str) -> bool:
     return proc.returncode == 0
 
 
+def _normalize_text(value: str | None) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _site_key_from_info(meta: dict) -> str:
+    extractor = str(meta.get("extractor") or meta.get("extractor_key") or "").lower()
+    if extractor:
+        return extractor
+
+    webpage_url = str(meta.get("webpage_url") or meta.get("url") or "").lower()
+    if "youtube.com" in webpage_url or "youtu.be" in webpage_url:
+        return "youtube"
+    if "soundcloud.com" in webpage_url:
+        return "soundcloud"
+    if "bandcamp.com" in webpage_url:
+        return "bandcamp"
+    if "nicovideo.jp" in webpage_url:
+        return "nicovideo"
+    if "tiktok.com" in webpage_url:
+        return "tiktok"
+    if "spotify.com" in webpage_url:
+        return "spotify"
+
+    return "generic"
+
+
+def _format_title_from_metadata(meta: dict) -> str:
+    title = _normalize_text(meta.get("title"))
+    artist = _normalize_text(meta.get("artist") or meta.get("album_artist") or meta.get("creator") or meta.get("uploader"))
+    track = _normalize_text(meta.get("track") or meta.get("alt_title") or meta.get("release_title"))
+    site = _site_key_from_info(meta)
+
+    def _with_artist(first: str, second: str) -> str:
+        if not first:
+            return second
+        if not second:
+            return first
+        if second.lower().startswith(first.lower()):
+            return second
+        return f"{first} - {second}"
+
+    if not title:
+        return artist or track or "unknown"
+
+    if site == "youtube":
+        if artist and track:
+            return _with_artist(artist, track)
+        if artist:
+            return _with_artist(artist, title)
+        if meta.get("uploader"):
+            return _with_artist(_normalize_text(meta["uploader"]), title)
+        return title
+
+    if site == "soundcloud":
+        if artist:
+            return _with_artist(artist, title)
+        return title
+
+    if site == "bandcamp":
+        if artist:
+            return _with_artist(artist, title)
+        if track:
+            return _with_artist(track, title)
+        return title
+
+    if site == "nicovideo":
+        return title
+
+    if site == "tiktok":
+        uploader = _normalize_text(meta.get("uploader"))
+        if uploader:
+            return _with_artist(uploader, title)
+        return title
+
+    if site == "spotify":
+        if artist and track:
+            return _with_artist(artist, track)
+        if artist:
+            return _with_artist(artist, title)
+        return title
+
+    if artist:
+        return _with_artist(artist, title)
+    if track:
+        return _with_artist(track, title)
+    return title
+
+
+def _load_info_json(mp3_path: Path) -> dict | None:
+    info_path = mp3_path.with_suffix(".info.json")
+    if not info_path.exists():
+        return None
+    try:
+        return json.loads(info_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"info.json の読み込みに失敗しました: {e}")
+        return None
+
+
 async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
     template = str(Path(output_dir) / "%(title).80s.%(ext)s")
     cmd = [
@@ -95,6 +194,7 @@ async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
         # ── 音源選択: m4a専用ストリーム優先 → 汎用音声 → 映像混合にフォールバック
         "-f", "bestaudio[ext=m4a]/bestaudio/best",
         # ── メタデータ ──────────────────────────
+        "--write-info-json",
         "--embed-thumbnail",
         "--convert-thumbnails", "jpg",
         "--embed-metadata",
@@ -229,15 +329,17 @@ async def process_url(message: discord.Message, url: str) -> None:
 
             download_links = []
             for mp3 in mp3_files:
+                info_meta = _load_info_json(mp3)
+                title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
                 token = register_file(
                     mp3,
                     source_url=url,
-                    title=mp3.stem,
+                    title=title_text,
                     guild_id=message.guild.id,   # ← サーバーIDを渡す
                 )
                 # URL に guild_id を含める
                 link = f"{BASE_URL}/files/{message.guild.id}/{token}"
-                download_links.append((mp3.stem, link))
+                download_links.append((title_text, link))
 
         await message.remove_reaction("⏳", bot.user)
         await message.add_reaction("✅")
