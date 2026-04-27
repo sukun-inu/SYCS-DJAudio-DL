@@ -91,15 +91,16 @@ async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
         # ── 音声抽出 ────────────────────────────
         "-x",
         "--audio-format", "mp3",
-        # 0 = VBR 最高品質（ffmpeg の -q:a 0 相当、320kbps 相当）
         "--audio-quality", "0",
-        # ── 音源選択: 最高ビットレートの音声ストリームを優先 ──
-        # bestaudio: 映像なし音声専用ストリームの中で最高品質
-        # /bestaudio*: 映像込みでも音声が最高のものにフォールバック
-        "-f", "bestaudio/bestaudio*",
+        # ── 音源選択: m4a専用ストリーム優先 → 汎用音声 → 映像混合にフォールバック
+        "-f", "bestaudio[ext=m4a]/bestaudio/best",
         # ── メタデータ ──────────────────────────
         "--embed-thumbnail",
-        "--add-metadata",
+        "--convert-thumbnails", "jpg",
+        "--embed-metadata",
+        # ── 信頼性 ──────────────────────────────
+        "--retries", "5",
+        "--socket-timeout", "30",
         # ── その他 ──────────────────────────────
         "--no-playlist",
         "-o", template,
