@@ -90,8 +90,18 @@ def _normalize_text(value: str | None) -> str:
 
 def _site_key_from_info(meta: dict) -> str:
     extractor = str(meta.get("extractor") or meta.get("extractor_key") or "").lower()
-    if extractor:
-        return extractor
+    if "youtube" in extractor:
+        return "youtube"
+    if "soundcloud" in extractor:
+        return "soundcloud"
+    if "bandcamp" in extractor:
+        return "bandcamp"
+    if "nicovideo" in extractor or "nico" in extractor:
+        return "nicovideo"
+    if "tiktok" in extractor:
+        return "tiktok"
+    if "spotify" in extractor:
+        return "spotify"
 
     webpage_url = str(meta.get("webpage_url") or meta.get("url") or "").lower()
     if "youtube.com" in webpage_url or "youtu.be" in webpage_url:

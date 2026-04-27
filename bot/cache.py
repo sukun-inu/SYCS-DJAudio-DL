@@ -7,6 +7,7 @@
 
 import os
 import json
+import re
 import uuid
 import shutil
 import asyncio
@@ -20,6 +21,18 @@ CACHE_DIR = Path(os.getenv("CACHE_DIR", "/app/cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "600"))
+
+
+def _sanitize_filename(value: str, fallback: str = "file") -> str:
+    value = str(value or "").strip()
+    value = value.replace("/", " ").replace("\\", " ")
+    value = re.sub(r"[<>:\\"|?*]", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    safe = "".join(c for c in value if c.isalnum() or c in " ._-()[]{}")
+    safe = safe.strip()[:120]
+    if not safe:
+        safe = fallback
+    return safe
 
 
 # ──────────────────────────────────────────────
@@ -37,19 +50,20 @@ def register_file(mp3_path: Path, source_url: str, title: str, guild_id: int) ->
 
     shutil.move(str(mp3_path), dest_mp3)
 
+    safe_title = _sanitize_filename(title, fallback=token)
     expires_at = datetime.now(timezone.utc).timestamp() + CACHE_TTL
     meta = {
         "token":      token,
         "guild_id":   str(guild_id),   # ← サーバー ID を記録
         "title":      title,
         "source_url": source_url,
-        "filename":   f"{title}.mp3",
+        "filename":   f"{safe_title}.mp3",
         "expires_at": expires_at,
     }
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
 
-    logger.info(f"キャッシュ登録: {token} guild={guild_id} ({title}) TTL={CACHE_TTL}s")
+    logger.info(f"キャッシュ登録: {token} guild={guild_id} ({safe_title}) TTL={CACHE_TTL}s")
     return token
 
 
