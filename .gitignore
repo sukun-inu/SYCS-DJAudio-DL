@@ -1,0 +1,13 @@
+# 絶対にコミットしてはいけないファイル
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Docker override
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db

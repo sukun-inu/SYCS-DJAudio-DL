@@ -1,0 +1,78 @@
+services:
+
+  # ────────────────────────────────────────────
+  # Discord Bot
+  # ────────────────────────────────────────────
+  bot:
+    build: ./bot
+    container_name: ytdlp-bot
+    restart: unless-stopped
+    depends_on:
+      - flask
+    environment:
+      # ── 必須 ────────────────────────────────
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+
+      # ── Flask 配信サーバーのベース URL ──────
+      # ドメインが決まったら https://your-domain.com に変更
+      # ポート公開する場合は http://your-server-ip:5000
+      BASE_URL: ${BASE_URL:-http://localhost:5000}
+
+      # ── キャッシュ設定 ──────────────────────
+      # MP3 の保持時間（秒）。デフォルト 600 = 10分
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-600}
+      CACHE_DIR: /app/cache
+
+      # ── その他（任意）──────────────────────
+      DEFAULT_CHANNEL_ID: ${DEFAULT_CHANNEL_ID:-}
+
+      # ── ログレベル（DEBUG / INFO / WARNING）─
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    volumes:
+      # 設定ファイル永続化（チャンネル設定）
+      - bot_data:/app/data
+      # Bot と Flask でキャッシュを共有
+      - mp3_cache:/app/cache
+
+    # ── Docker ログ設定 ──────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"   # 1ファイル最大 30MB
+        max-file: "5"     # 最大 5ファイル（合計 50MB）ローテーション
+
+  # ────────────────────────────────────────────
+  # Flask MP3 配信サーバー
+  # ────────────────────────────────────────────
+  flask:
+    build: ./flask_server
+    container_name: ytdlp-flask
+    restart: unless-stopped
+    environment:
+      CACHE_DIR: /app/cache
+      FLASK_PORT: ${FLASK_PORT:-5000}
+      FLASK_HOST: "0.0.0.0"
+
+      # ── ログレベル（DEBUG / INFO / WARNING）─
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    ports:
+      # ホスト側ポート:コンテナ側ポート
+      # Nginx などのリバースプロキシを使う場合は "127.0.0.1:5000:5000" に変更
+      - "${FLASK_PORT:-5000}:5000"
+
+    volumes:
+      # Bot と同じキャッシュを参照
+      - mp3_cache:/app/cache
+
+    # ── Docker ログ設定 ──────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"   # 1ファイル最大 30MB
+        max-file: "5"     # 最大 5ファイル（合計 50MB）ローテーション
+
+volumes:
+  bot_data:    # チャンネル設定を永続保存
+  mp3_cache:   # MP3 キャッシュを bot/flask 間で共有
