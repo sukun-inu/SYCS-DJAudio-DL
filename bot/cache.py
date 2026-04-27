@@ -8,6 +8,7 @@
 import os
 import json
 import uuid
+import shutil
 import asyncio
 import logging
 from pathlib import Path
@@ -34,7 +35,7 @@ def register_file(mp3_path: Path, source_url: str, title: str, guild_id: int) ->
     dest_mp3  = CACHE_DIR / f"{token}.mp3"
     meta_path = CACHE_DIR / f"{token}.json"
 
-    mp3_path.rename(dest_mp3)
+    shutil.move(str(mp3_path), dest_mp3)
 
     expires_at = datetime.now(timezone.utc).timestamp() + CACHE_TTL
     meta = {
