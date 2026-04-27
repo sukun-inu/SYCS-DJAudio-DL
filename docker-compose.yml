@@ -4,7 +4,7 @@ services:
   # Discord Bot
   # ────────────────────────────────────────────
   bot:
-    build: ./bot
+    image: ghcr.io/sukun-inu/sycs-djaudio-dl-bot:latest
     container_name: ytdlp-bot
     restart: unless-stopped
     depends_on:
@@ -46,7 +46,7 @@ services:
   # Flask MP3 配信サーバー
   # ────────────────────────────────────────────
   flask:
-    build: ./flask_server
+    image: ghcr.io/sukun-inu/sycs-djaudio-dl-flask:latest
     container_name: ytdlp-flask
     restart: unless-stopped
     environment:
