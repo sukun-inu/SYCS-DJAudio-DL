@@ -94,15 +94,15 @@ def _write_tags(mp3_path: Path, data: dict, cover: bytes | None) -> None:
         tags["TRCK"] = TRCK(encoding=3, text=str(track_pos))
     if disk_num:
         tags["TPOS"] = TPOS(encoding=3, text=str(disk_num))
-    if cover:
+    if cover and cover[:3] == b"\xff\xd8\xff":  # JPEG magic bytes
         tags.delall("APIC")
-        tags["APIC"] = APIC(
+        tags.add(APIC(
             encoding=3,
             mime="image/jpeg",
             type=3,
             desc="Cover",
             data=cover,
-        )
+        ))
 
     tags.save(mp3_path)
 
