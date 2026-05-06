@@ -365,21 +365,21 @@ async def process_url(message: discord.Message, url: str) -> None:
                     download_as_mp3(url, tmpdir),
                     timeout=DL_TIMEOUT,
                 )
-            if not mp3_files:
-                raise RuntimeError("MP3 ファイルが生成されませんでした")
+                if not mp3_files:
+                    raise RuntimeError("MP3 ファイルが生成されませんでした")
 
-            download_links = []
-            for mp3 in mp3_files:
-                info_meta = _load_info_json(mp3)
-                title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
-                token = register_file(
-                    mp3,
-                    source_url=url,
-                    title=title_text,
-                    guild_id=message.guild.id,
-                )
-                link = f"{BASE_URL}/files/{message.guild.id}/{token}"
-                download_links.append((title_text, link))
+                download_links = []
+                for mp3 in mp3_files:
+                    info_meta = _load_info_json(mp3)
+                    title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
+                    token = register_file(
+                        mp3,
+                        source_url=url,
+                        title=title_text,
+                        guild_id=message.guild.id,
+                    )
+                    link = f"{BASE_URL}/files/{message.guild.id}/{token}"
+                    download_links.append((title_text, link))
 
         await message.remove_reaction("⏳", bot.user)
         await message.add_reaction("✅")
