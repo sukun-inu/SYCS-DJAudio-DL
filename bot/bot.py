@@ -216,7 +216,7 @@ async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
         "--embed-metadata",
         # ── 高速化 ──────────────────────────────
         "--concurrent-fragments", "4",
-        "--buffersize", "1M",
+        "--buffer-size", "1M",
         "--http-chunk-size", "10M",
         # ── 信頼性 ──────────────────────────────
         "--retries", "5",
