@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py cache.py isrc_meta.py ./
+COPY bot.py cache.py config.py isrc_meta.py site_detection.py ./
 
 RUN mkdir -p /app/data /app/cache
 

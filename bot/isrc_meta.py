@@ -16,6 +16,8 @@ import aiohttp
 from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPOS, TPE1, TRCK
 from mutagen.mp3 import MP3
 
+from site_detection import detect_site
+
 logger = logging.getLogger(__name__)
 
 _DEEZER_ISRC   = "https://api.deezer.com/track/isrc:{}"
@@ -108,39 +110,6 @@ def _score_result(item: dict, ref_title: str, ref_artist: str | None) -> float:
         return title_sim * 0.65 + artist_sim * 0.35
 
     return title_sim
-
-
-def _site_from_info(info: dict) -> str:
-    """yt-dlp の info.json からソース媒体を判定する。"""
-    extractor = str(info.get("extractor") or info.get("extractor_key") or "").lower()
-    if "youtube" in extractor:
-        return "youtube"
-    if "soundcloud" in extractor:
-        return "soundcloud"
-    if "bandcamp" in extractor:
-        return "bandcamp"
-    if "nicovideo" in extractor or "nico" in extractor:
-        return "nicovideo"
-    if "tiktok" in extractor:
-        return "tiktok"
-    if "spotify" in extractor:
-        return "spotify"
-
-    url = str(info.get("webpage_url") or info.get("url") or "").lower()
-    if "youtube.com" in url or "youtu.be" in url:
-        return "youtube"
-    if "soundcloud.com" in url:
-        return "soundcloud"
-    if "bandcamp.com" in url:
-        return "bandcamp"
-    if "nicovideo.jp" in url:
-        return "nicovideo"
-    if "tiktok.com" in url:
-        return "tiktok"
-    if "spotify.com" in url:
-        return "spotify"
-
-    return "generic"
 
 
 def _build_search_queries(title: str, artist: str | None, site: str, info: dict) -> list[str]:
@@ -251,7 +220,7 @@ async def _fetch_by_isrc(isrc: str, session: aiohttp.ClientSession) -> dict | No
                 logger.info(f"Deezer: ISRC={isrc} 未登録")
                 return None
             return data
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         logger.warning(f"Deezer ISRC 検索エラー: {e}")
         return None
 
@@ -311,7 +280,7 @@ async def _fetch_by_search(
             if not items:
                 logger.debug(f"Deezer 検索ミス: q={q!r}")
 
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.warning(f"Deezer テキスト検索エラー (q={q!r}): {e}")
 
     if best_item and best_score >= _MIN_SCORE:
@@ -330,7 +299,7 @@ async def _download_bytes(url: str, session: aiohttp.ClientSession) -> bytes | N
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
                 return await resp.read()
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         logger.warning(f"カバー画像取得エラー: {e}")
     return None
 
@@ -393,7 +362,7 @@ async def enrich_metadata(mp3_path: Path, info: dict) -> bool:
         or info.get("creator")
         or info.get("uploader")
     )
-    site = _site_from_info(info)
+    site = detect_site(info)
 
     if not isrc and not title:
         return False

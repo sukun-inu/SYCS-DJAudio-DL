@@ -6,10 +6,10 @@ Discord YT-DLP Bot（マルチサーバー対応版）
 - コマンドは /setchannel のみ
 """
 
-import os
 import json
 import asyncio
 import logging
+import os
 import re
 import tempfile
 import time
@@ -20,13 +20,18 @@ from discord import app_commands
 from discord.ext import commands
 
 from cache import register_file, cache_cleanup_loop, update_discord_message
+from config import (
+    BASE_URL, CACHE_TTL, COOLDOWN_SECONDS, DL_CONCURRENCY,
+    DL_TIMEOUT, FFMPEG_PATH, LOG_LEVEL, MAX_URLS_PER_MSG,
+)
 from isrc_meta import enrich_metadata
+from site_detection import detect_site
 
 # ──────────────────────────────────────────────
 # ロギング
 # ──────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -36,14 +41,6 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 CONFIG_PATH = Path("/app/data/config.json")
 CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-BASE_URL  = os.getenv("BASE_URL", "http://localhost:5000").rstrip("/")
-CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "600"))
-
-COOLDOWN_SECONDS  = int(os.getenv("COOLDOWN_SECONDS", "30"))
-MAX_URLS_PER_MSG  = int(os.getenv("MAX_URLS_PER_MSG", "3"))
-DL_CONCURRENCY    = int(os.getenv("DL_CONCURRENCY", "3"))
-DL_TIMEOUT        = int(os.getenv("DL_TIMEOUT_SECONDS", "120"))
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 
@@ -56,7 +53,7 @@ def load_config() -> dict:
         try:
             with CONFIG_PATH.open("r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"設定読み込み失敗: {e}")
     return {}
 
@@ -82,7 +79,7 @@ def get_watch_channel_id(guild_id: int) -> int | None:
 async def can_download(url: str) -> bool:
     proc = await asyncio.create_subprocess_exec(
         "yt-dlp", "--simulate", "--quiet", "--no-warnings",
-        "--ffmpeg-location", "/usr/bin/ffmpeg",
+        "--ffmpeg-location", FFMPEG_PATH,
         url,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
@@ -95,43 +92,16 @@ def _normalize_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _site_key_from_info(meta: dict) -> str:
-    extractor = str(meta.get("extractor") or meta.get("extractor_key") or "").lower()
-    if "youtube" in extractor:
-        return "youtube"
-    if "soundcloud" in extractor:
-        return "soundcloud"
-    if "bandcamp" in extractor:
-        return "bandcamp"
-    if "nicovideo" in extractor or "nico" in extractor:
-        return "nicovideo"
-    if "tiktok" in extractor:
-        return "tiktok"
-    if "spotify" in extractor:
-        return "spotify"
-
-    webpage_url = str(meta.get("webpage_url") or meta.get("url") or "").lower()
-    if "youtube.com" in webpage_url or "youtu.be" in webpage_url:
-        return "youtube"
-    if "soundcloud.com" in webpage_url:
-        return "soundcloud"
-    if "bandcamp.com" in webpage_url:
-        return "bandcamp"
-    if "nicovideo.jp" in webpage_url:
-        return "nicovideo"
-    if "tiktok.com" in webpage_url:
-        return "tiktok"
-    if "spotify.com" in webpage_url:
-        return "spotify"
-
-    return "generic"
-
-
 def _format_title_from_metadata(meta: dict) -> str:
-    title = _normalize_text(meta.get("title"))
-    artist = _normalize_text(meta.get("artist") or meta.get("album_artist") or meta.get("creator") or meta.get("uploader"))
-    track = _normalize_text(meta.get("track") or meta.get("alt_title") or meta.get("release_title"))
-    site = _site_key_from_info(meta)
+    title  = _normalize_text(meta.get("title"))
+    artist = _normalize_text(
+        meta.get("artist") or meta.get("album_artist")
+        or meta.get("creator") or meta.get("uploader")
+    )
+    track = _normalize_text(
+        meta.get("track") or meta.get("alt_title") or meta.get("release_title")
+    )
+    site = detect_site(meta)
 
     def _with_artist(first: str, second: str) -> str:
         if not first:
@@ -155,38 +125,28 @@ def _format_title_from_metadata(meta: dict) -> str:
         return title
 
     if site == "soundcloud":
-        if artist:
-            return _with_artist(artist, title)
-        return title
+        return _with_artist(artist, title) if artist else title
 
     if site == "bandcamp":
         if artist:
             return _with_artist(artist, title)
-        if track:
-            return _with_artist(track, title)
-        return title
+        return _with_artist(track, title) if track else title
 
     if site == "nicovideo":
         return title
 
     if site == "tiktok":
         uploader = _normalize_text(meta.get("uploader"))
-        if uploader:
-            return _with_artist(uploader, title)
-        return title
+        return _with_artist(uploader, title) if uploader else title
 
     if site == "spotify":
         if artist and track:
             return _with_artist(artist, track)
-        if artist:
-            return _with_artist(artist, title)
-        return title
+        return _with_artist(artist, title) if artist else title
 
     if artist:
         return _with_artist(artist, title)
-    if track:
-        return _with_artist(track, title)
-    return title
+    return _with_artist(track, title) if track else title
 
 
 def _load_info_json(mp3_path: Path) -> dict | None:
@@ -195,7 +155,7 @@ def _load_info_json(mp3_path: Path) -> dict | None:
         return None
     try:
         return json.loads(info_path.read_text(encoding="utf-8"))
-    except Exception as e:
+    except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"info.json の読み込みに失敗しました: {e}")
         return None
 
@@ -204,32 +164,24 @@ async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
     template = str(Path(output_dir) / "%(title).80s.%(ext)s")
     cmd = [
         "yt-dlp",
-        # ── 音声抽出 ────────────────────────────
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "0",
-        # ── 音源選択: 音声ストリームのみから最高品質を選択
         "-f", "bestaudio/best",
-        # ── 品質ソート: サンプルレート → ビットレート → コーデック(opus優先)
         "--format-sort", "asr,abr,acodec:opus",
-        # ── MP3変換時にソースのサンプルレートを維持
         "--postprocessor-args", "ffmpeg:-q:a 0",
-        # ── メタデータ ──────────────────────────
         "--write-info-json",
         "--embed-thumbnail",
         "--convert-thumbnails", "jpg",
         "--embed-metadata",
-        # ── 高速化 ──────────────────────────────
         "--concurrent-fragments", "4",
         "--buffer-size", "1M",
         "--http-chunk-size", "10M",
-        # ── 信頼性 ──────────────────────────────
         "--retries", "5",
         "--socket-timeout", "30",
-        # ── その他 ──────────────────────────────
         "--no-playlist",
         "-o", template,
-        "--ffmpeg-location", "/usr/bin/ffmpeg",
+        "--ffmpeg-location", FFMPEG_PATH,
         "--no-warnings",
         url,
     ]
@@ -345,11 +297,47 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
+# ──────────────────────────────────────────────
+# ダウンロード処理
+# ──────────────────────────────────────────────
+
+async def _download_and_register(url: str, guild_id: int, tmpdir: str) -> list[tuple[str, str]]:
+    """MP3 をダウンロードしてメタデータを補完・キャッシュ登録し、(title, token) のリストを返す。"""
+    mp3_files = await download_as_mp3(url, tmpdir)
+    if not mp3_files:
+        raise RuntimeError("MP3 ファイルが生成されませんでした")
+
+    results: list[tuple[str, str]] = []
+    for mp3 in mp3_files:
+        info_meta = _load_info_json(mp3)
+        if info_meta:
+            await enrich_metadata(mp3, info_meta)
+        title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
+        token = register_file(mp3, source_url=url, title=title_text, guild_id=guild_id)
+        results.append((title_text, token))
+    return results
+
+
+def _build_result_embed(results: list[tuple[str, str]], guild_id: int) -> discord.Embed:
+    """ダウンロード結果の Discord Embed を構築する。"""
+    ttl_min = CACHE_TTL // 60
+    embed = discord.Embed(
+        title="🎵 MP3 準備完了",
+        color=discord.Color.blurple(),
+        description=f"⏱️ リンクは **{ttl_min}分後** に失効します",
+    )
+    for title, token in results:
+        link = f"{BASE_URL}/files/{guild_id}/{token}"
+        embed.add_field(
+            name=f"📥 {title[:50]}",
+            value=f"[ダウンロード]({link})\n`{link}`",
+            inline=False,
+        )
+    return embed
+
+
 async def process_url(message: discord.Message, url: str) -> None:
-    """
-    URL を処理して Flask 配信リンクを返信する。
-    リンク形式: BASE_URL/files/<guild_id>/<token>
-    """
+    """URL を処理して Flask 配信リンクを返信する。"""
     key = (message.guild.id, message.id, url)
     if key in processing:
         return
@@ -366,50 +354,20 @@ async def process_url(message: discord.Message, url: str) -> None:
 
         async with _get_semaphore():
             with tempfile.TemporaryDirectory() as tmpdir:
-                mp3_files = await asyncio.wait_for(
-                    download_as_mp3(url, tmpdir),
+                results = await asyncio.wait_for(
+                    _download_and_register(url, message.guild.id, tmpdir),
                     timeout=DL_TIMEOUT,
                 )
-                if not mp3_files:
-                    raise RuntimeError("MP3 ファイルが生成されませんでした")
-
-                download_links = []
-                tokens = []
-                for mp3 in mp3_files:
-                    info_meta = _load_info_json(mp3)
-                    if info_meta:
-                        await enrich_metadata(mp3, info_meta)
-                    title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
-                    token = register_file(
-                        mp3,
-                        source_url=url,
-                        title=title_text,
-                        guild_id=message.guild.id,
-                    )
-                    link = f"{BASE_URL}/files/{message.guild.id}/{token}"
-                    download_links.append((title_text, link))
-                    tokens.append(token)
 
         await message.remove_reaction("⏳", bot.user)
         await message.add_reaction("✅")
 
-        ttl_min = CACHE_TTL // 60
-        embed = discord.Embed(
-            title="🎵 MP3 準備完了",
-            color=discord.Color.blurple(),
-            description=f"⏱️ リンクは **{ttl_min}分後** に失効します",
-        )
-        for title, link in download_links:
-            embed.add_field(
-                name=f"📥 {title[:50]}",
-                value=f"[ダウンロード]({link})\n`{link}`",
-                inline=False,
-            )
+        embed = _build_result_embed(results, message.guild.id)
         embed.set_footer(text=f"リクエスト: {message.author.display_name}")
         reply_msg = await message.reply(embed=embed, mention_author=False)
-        for token in tokens:
+        for _, token in results:
             update_discord_message(token, reply_msg.channel.id, reply_msg.id)
-        logger.info(f"完了 guild={message.guild.id} [{message.author}]: {len(download_links)} ファイル")
+        logger.info(f"完了 guild={message.guild.id} [{message.author}]: {len(results)} ファイル")
 
     except asyncio.TimeoutError:
         logger.error(f"タイムアウト [{url}]")
@@ -417,7 +375,7 @@ async def process_url(message: discord.Message, url: str) -> None:
             await message.remove_reaction("⏳", bot.user)
             await message.add_reaction("❌")
             await message.reply("⚠️ タイムアウトしました。時間をおいて再試行してください。", mention_author=False)
-        except Exception:
+        except discord.HTTPException:
             pass
     except Exception as e:
         logger.exception(f"処理失敗 [{url}]: {e}")
@@ -428,7 +386,7 @@ async def process_url(message: discord.Message, url: str) -> None:
                 f"⚠️ ダウンロードに失敗しました\n```\n{str(e)[:300]}\n```",
                 mention_author=False,
             )
-        except Exception:
+        except discord.HTTPException:
             pass
     finally:
         processing.discard(key)

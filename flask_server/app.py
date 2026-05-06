@@ -10,16 +10,17 @@ Flask MP3 配信サーバー（マルチサーバー対応版）
   存在しない → 404 Not Found
 """
 
-import os
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, send_file, jsonify, abort
 
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 CACHE_DIR  = Path(os.getenv("CACHE_DIR", "/app/cache"))
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5000"))
 FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
+
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -45,11 +48,8 @@ def _validate_guild_id(guild_id: str) -> bool:
     return guild_id.isdigit()
 
 
-def _load_meta(token: str) -> dict | None:
-    """メタデータを読み込む。存在しない or 期限切れなら None。"""
-    if not _validate_token(token):
-        return None
-
+def _read_meta(token: str) -> dict | None:
+    """JSON ファイルを読み込んで返す。ファイル不在・パース失敗なら None。"""
     meta_path = CACHE_DIR / f"{token}.json"
     mp3_path  = CACHE_DIR / f"{token}.mp3"
 
@@ -58,16 +58,36 @@ def _load_meta(token: str) -> dict | None:
 
     try:
         with meta_path.open("r", encoding="utf-8") as f:
-            meta = json.load(f)
-    except Exception:
+            return json.load(f)
+    except json.JSONDecodeError:
         return None
 
-    if datetime.now(timezone.utc).timestamp() > meta.get("expires_at", 0):
-        for suffix in (".mp3", ".json"):
-            try:
-                (CACHE_DIR / f"{token}{suffix}").unlink(missing_ok=True)
-            except Exception:
-                pass
+
+def _is_expired(meta: dict) -> bool:
+    """メタデータの期限切れを判定する。"""
+    return datetime.now(timezone.utc).timestamp() > meta.get("expires_at", 0)
+
+
+def _delete_entry(token: str) -> None:
+    """キャッシュファイルを削除する。"""
+    for suffix in (".mp3", ".json"):
+        try:
+            (CACHE_DIR / f"{token}{suffix}").unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning(f"削除失敗 {token}{suffix}: {e}")
+
+
+def _load_meta(token: str) -> dict | None:
+    """メタデータを読み込む。存在しない or 期限切れなら None。"""
+    if not _validate_token(token):
+        return None
+
+    meta = _read_meta(token)
+    if meta is None:
+        return None
+
+    if _is_expired(meta):
+        _delete_entry(token)
         logger.info(f"期限切れ: {token}")
         return None
 
@@ -89,18 +109,14 @@ def serve_file(guild_id: str, token: str):
     MP3 ファイルを配信する。
     URL の guild_id とメタデータの guild_id が一致しないと 403。
     """
-    # 入力値チェック
     if not _validate_guild_id(guild_id) or not _validate_token(token):
         abort(404)
 
     meta = _load_meta(token)
 
-    # 存在しない or 期限切れ
     if meta is None:
-        # .json が残っていれば期限切れ扱い、なければ Not Found
-        abort(410 if not (CACHE_DIR / f"{token}.json").exists() else 410)
+        abort(410)
 
-    # ── サーバー ID の照合 ──────────────────
     if meta.get("guild_id") != guild_id:
         logger.warning(
             f"guild_id 不一致: URL={guild_id} meta={meta.get('guild_id')} token={token}"
@@ -109,7 +125,6 @@ def serve_file(guild_id: str, token: str):
 
     mp3_path = CACHE_DIR / f"{token}.mp3"
     raw_name = meta.get("filename", f"{token}.mp3")
-    # ファイル名の安全化
     safe_name = "".join(
         c for c in raw_name if c.isalnum() or c in " ._-"
     ).strip() or f"{token}.mp3"

@@ -5,7 +5,6 @@
 - TTL 経過後に自動削除
 """
 
-import os
 import json
 import re
 import uuid
@@ -15,12 +14,11 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
+from config import CACHE_DIR, CACHE_TTL
+
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path(os.getenv("CACHE_DIR", "/app/cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "600"))
 
 
 def _sanitize_filename(value: str, fallback: str = "file") -> str:
@@ -44,7 +42,7 @@ def register_file(mp3_path: Path, source_url: str, title: str, guild_id: int) ->
     MP3 をキャッシュに登録してトークンを返す。
     guild_id をメタデータに含めてサーバーごとのアクセス制御に使う。
     """
-    token = uuid.uuid4().hex
+    token     = uuid.uuid4().hex
     dest_mp3  = CACHE_DIR / f"{token}.mp3"
     meta_path = CACHE_DIR / f"{token}.json"
 
@@ -54,7 +52,7 @@ def register_file(mp3_path: Path, source_url: str, title: str, guild_id: int) ->
     expires_at = datetime.now(timezone.utc).timestamp() + CACHE_TTL
     meta = {
         "token":      token,
-        "guild_id":   str(guild_id),   # ← サーバー ID を記録
+        "guild_id":   str(guild_id),
         "title":      title,
         "source_url": source_url,
         "filename":   f"{safe_title}.mp3",
@@ -77,7 +75,7 @@ def update_discord_message(token: str, channel_id: int, message_id: int) -> None
         meta["discord_message_id"] = str(message_id)
         with meta_path.open("w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False)
-    except Exception as e:
+    except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"Discord メッセージ情報の更新失敗 {token}: {e}")
 
 
@@ -96,7 +94,7 @@ def get_meta(token: str) -> dict | None:
     try:
         with meta_path.open("r", encoding="utf-8") as f:
             meta = json.load(f)
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
     if datetime.now(timezone.utc).timestamp() > meta["expires_at"]:
@@ -115,7 +113,7 @@ def _delete_entry(token: str) -> None:
         p = CACHE_DIR / f"{token}{suffix}"
         try:
             p.unlink(missing_ok=True)
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"削除失敗 {p}: {e}")
     logger.info(f"キャッシュ削除: {token}")
 
@@ -154,7 +152,7 @@ async def _cleanup_expired(bot=None) -> None:
                             logger.warning(f"メッセージ削除失敗 {message_id}: {e}")
                 _delete_entry(meta["token"])
                 deleted += 1
-        except Exception as e:
+        except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"掃除中にエラー {meta_path}: {e}")
     if deleted:
         logger.info(f"期限切れキャッシュ {deleted} 件を削除")
