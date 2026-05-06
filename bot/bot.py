@@ -20,7 +20,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from cache import register_file, cache_cleanup_loop
-from isrc_meta import enrich_with_isrc
+from isrc_meta import enrich_metadata
 
 # ──────────────────────────────────────────────
 # ロギング
@@ -373,7 +373,7 @@ async def process_url(message: discord.Message, url: str) -> None:
                 for mp3 in mp3_files:
                     info_meta = _load_info_json(mp3)
                     if info_meta:
-                        await enrich_with_isrc(mp3, info_meta)
+                        await enrich_metadata(mp3, info_meta)
                     title_text = _format_title_from_metadata(info_meta) if info_meta else mp3.stem
                     token = register_file(
                         mp3,
