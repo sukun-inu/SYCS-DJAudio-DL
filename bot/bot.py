@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import tempfile
+import time
 from pathlib import Path
 
 import discord
@@ -37,6 +38,11 @@ CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 BASE_URL  = os.getenv("BASE_URL", "http://localhost:5000").rstrip("/")
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "600"))
+
+COOLDOWN_SECONDS  = int(os.getenv("COOLDOWN_SECONDS", "30"))
+MAX_URLS_PER_MSG  = int(os.getenv("MAX_URLS_PER_MSG", "3"))
+DL_CONCURRENCY    = int(os.getenv("DL_CONCURRENCY", "3"))
+DL_TIMEOUT        = int(os.getenv("DL_TIMEOUT_SECONDS", "120"))
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 
@@ -245,7 +251,16 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+_dl_semaphore: asyncio.Semaphore | None = None
+_user_cooldown: dict[int, float] = {}
 processing: set[tuple] = set()
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _dl_semaphore
+    if _dl_semaphore is None:
+        _dl_semaphore = asyncio.Semaphore(DL_CONCURRENCY)
+    return _dl_semaphore
 
 
 @bot.event
@@ -309,9 +324,17 @@ async def on_message(message: discord.Message):
     if watch_ch_id is None or message.channel.id != watch_ch_id:
         return
 
-    urls = URL_PATTERN.findall(message.content)
+    urls = URL_PATTERN.findall(message.content)[:MAX_URLS_PER_MSG]
     if not urls:
         return
+
+    now = time.monotonic()
+    last = _user_cooldown.get(message.author.id, 0)
+    if now - last < COOLDOWN_SECONDS:
+        remaining = int(COOLDOWN_SECONDS - (now - last))
+        await message.reply(f"⏱️ {remaining}秒後に再試行してください。", mention_author=False)
+        return
+    _user_cooldown[message.author.id] = now
 
     await asyncio.gather(*[process_url(message, url) for url in urls])
     await bot.process_commands(message)
@@ -336,8 +359,12 @@ async def process_url(message: discord.Message, url: str) -> None:
             await message.add_reaction("❓")
             return
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mp3_files = await download_as_mp3(url, tmpdir)
+        async with _get_semaphore():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                mp3_files = await asyncio.wait_for(
+                    download_as_mp3(url, tmpdir),
+                    timeout=DL_TIMEOUT,
+                )
             if not mp3_files:
                 raise RuntimeError("MP3 ファイルが生成されませんでした")
 
@@ -349,9 +376,8 @@ async def process_url(message: discord.Message, url: str) -> None:
                     mp3,
                     source_url=url,
                     title=title_text,
-                    guild_id=message.guild.id,   # ← サーバーIDを渡す
+                    guild_id=message.guild.id,
                 )
-                # URL に guild_id を含める
                 link = f"{BASE_URL}/files/{message.guild.id}/{token}"
                 download_links.append((title_text, link))
 
@@ -374,6 +400,14 @@ async def process_url(message: discord.Message, url: str) -> None:
         await message.reply(embed=embed, mention_author=False)
         logger.info(f"完了 guild={message.guild.id} [{message.author}]: {len(download_links)} ファイル")
 
+    except asyncio.TimeoutError:
+        logger.error(f"タイムアウト [{url}]")
+        try:
+            await message.remove_reaction("⏳", bot.user)
+            await message.add_reaction("❌")
+            await message.reply("⚠️ タイムアウトしました。時間をおいて再試行してください。", mention_author=False)
+        except Exception:
+            pass
     except Exception as e:
         logger.exception(f"処理失敗 [{url}]: {e}")
         try:
