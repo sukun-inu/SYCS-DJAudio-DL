@@ -1,5 +1,46 @@
 """yt-dlp の info.json からソース媒体を判定するユーティリティ。"""
 
+import re
+
+# yt-dlp で音声ダウンロードが可能なサービス
+SUPPORTED_SITES: frozenset[str] = frozenset({
+    "youtube",     # YouTube / YouTube Music
+    "soundcloud",  # SoundCloud
+    "bandcamp",    # Bandcamp
+    "nicovideo",   # ニコニコ動画
+    "tiktok",      # TikTok
+    "generic",     # 直リンク等
+})
+
+# yt-dlp では音声ダウンロードが不可能なサービスと理由
+# key: URL に含まれるパターン（正規表現）、value: ユーザー向けメッセージ
+_UNSUPPORTED_URL_RULES: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(r"open\.spotify\.com", re.IGNORECASE),
+        "Spotify は著作権保護のため音声をダウンロードできません。"
+        "YouTube Music などの代替 URL をお試しください。",
+    ),
+    (
+        re.compile(r"music\.apple\.com", re.IGNORECASE),
+        "Apple Music は著作権保護のため音声をダウンロードできません。",
+    ),
+    (
+        re.compile(r"music\.amazon\.(co\.jp|com)", re.IGNORECASE),
+        "Amazon Music は著作権保護のため音声をダウンロードできません。",
+    ),
+]
+
+
+def is_unsupported_url(url: str) -> str | None:
+    """
+    ダウンロード非対応サービスの URL であれば理由メッセージを返す。
+    対応サービスなら None。
+    """
+    for pattern, reason in _UNSUPPORTED_URL_RULES:
+        if pattern.search(url):
+            return reason
+    return None
+
 
 def detect_site(info: dict) -> str:
     """extractor フィールドと URL から媒体識別子を返す。"""
@@ -14,8 +55,6 @@ def detect_site(info: dict) -> str:
         return "nicovideo"
     if "tiktok" in extractor:
         return "tiktok"
-    if "spotify" in extractor:
-        return "spotify"
 
     url = str(info.get("webpage_url") or info.get("url") or "").lower()
     if "youtube.com" in url or "youtu.be" in url:
@@ -28,7 +67,5 @@ def detect_site(info: dict) -> str:
         return "nicovideo"
     if "tiktok.com" in url:
         return "tiktok"
-    if "spotify.com" in url:
-        return "spotify"
 
     return "generic"

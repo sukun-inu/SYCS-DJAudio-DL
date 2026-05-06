@@ -25,7 +25,7 @@ from config import (
     DL_TIMEOUT, FFMPEG_PATH, LOG_LEVEL, MAX_URLS_PER_MSG,
 )
 from isrc_meta import enrich_metadata
-from site_detection import detect_site
+from site_detection import detect_site, is_unsupported_url
 
 # ──────────────────────────────────────────────
 # ロギング
@@ -138,11 +138,6 @@ def _format_title_from_metadata(meta: dict) -> str:
     if site == "tiktok":
         uploader = _normalize_text(meta.get("uploader"))
         return _with_artist(uploader, title) if uploader else title
-
-    if site == "spotify":
-        if artist and track:
-            return _with_artist(artist, track)
-        return _with_artist(artist, title) if artist else title
 
     if artist:
         return _with_artist(artist, title)
@@ -346,6 +341,13 @@ async def process_url(message: discord.Message, url: str) -> None:
     try:
         await message.add_reaction("⏳")
         logger.info(f"URL検知 guild={message.guild.id} [{message.author}]: {url}")
+
+        unsupported_reason = is_unsupported_url(url)
+        if unsupported_reason:
+            await message.remove_reaction("⏳", bot.user)
+            await message.add_reaction("❌")
+            await message.reply(f"❌ {unsupported_reason}", mention_author=False)
+            return
 
         if not await can_download(url):
             await message.remove_reaction("⏳", bot.user)

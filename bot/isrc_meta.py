@@ -174,12 +174,6 @@ def _build_search_queries(title: str, artist: str | None, site: str, info: dict)
             queries.append(f'artist:"{artist}" track:"{clean}"')
         queries.append(f'track:"{clean}"')
 
-    elif site == "spotify":
-        # Spotify はメタデータが最も整っている
-        if artist:
-            queries.append(f'artist:"{artist}" track:"{clean}"')
-        queries.append(f'track:"{clean}"')
-
     elif site == "nicovideo":
         # ニコ動はタイトルに情報が集中（アーティスト情報は薄い）
         queries.append(f'track:"{clean}"')
