@@ -208,8 +208,12 @@ async def download_as_mp3(url: str, output_dir: str) -> list[Path]:
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "0",
-        # ── 音源選択: m4a専用ストリーム優先 → 汎用音声 → 映像混合にフォールバック
-        "-f", "bestaudio[ext=m4a]/bestaudio/best",
+        # ── 音源選択: 音声ストリームのみから最高品質を選択
+        "-f", "bestaudio/best",
+        # ── 品質ソート: サンプルレート → ビットレート → コーデック(opus優先)
+        "--format-sort", "asr,abr,acodec:opus",
+        # ── MP3変換時にソースのサンプルレートを維持
+        "--postprocessor-args", "ffmpeg:-q:a 0",
         # ── メタデータ ──────────────────────────
         "--write-info-json",
         "--embed-thumbnail",
