@@ -67,6 +67,20 @@ def register_file(mp3_path: Path, source_url: str, title: str, guild_id: int) ->
     return token
 
 
+def update_discord_message(token: str, channel_id: int, message_id: int) -> None:
+    """キャッシュエントリに Discord 返信メッセージ情報を記録する。"""
+    meta_path = CACHE_DIR / f"{token}.json"
+    try:
+        with meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["discord_channel_id"] = str(channel_id)
+        meta["discord_message_id"] = str(message_id)
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Discord メッセージ情報の更新失敗 {token}: {e}")
+
+
 # ──────────────────────────────────────────────
 # 取得
 # ──────────────────────────────────────────────
@@ -110,15 +124,15 @@ def _delete_entry(token: str) -> None:
 # バックグラウンド掃除（asyncio）
 # ──────────────────────────────────────────────
 
-async def cache_cleanup_loop(interval: int = 60) -> None:
+async def cache_cleanup_loop(bot=None, interval: int = 60) -> None:
     """interval 秒ごとに期限切れキャッシュを掃除するループ。"""
     logger.info(f"キャッシュ掃除ループ開始（{interval}秒間隔）")
     while True:
         await asyncio.sleep(interval)
-        _cleanup_expired()
+        await _cleanup_expired(bot)
 
 
-def _cleanup_expired() -> None:
+async def _cleanup_expired(bot=None) -> None:
     now = datetime.now(timezone.utc).timestamp()
     deleted = 0
     for meta_path in CACHE_DIR.glob("*.json"):
@@ -126,6 +140,18 @@ def _cleanup_expired() -> None:
             with meta_path.open("r", encoding="utf-8") as f:
                 meta = json.load(f)
             if now > meta.get("expires_at", 0):
+                if bot is not None:
+                    channel_id = meta.get("discord_channel_id")
+                    message_id = meta.get("discord_message_id")
+                    if channel_id and message_id:
+                        try:
+                            channel = bot.get_channel(int(channel_id))
+                            if channel:
+                                msg = await channel.fetch_message(int(message_id))
+                                await msg.delete()
+                                logger.info(f"Discord メッセージ削除: {message_id}")
+                        except Exception as e:
+                            logger.warning(f"メッセージ削除失敗 {message_id}: {e}")
                 _delete_entry(meta["token"])
                 deleted += 1
         except Exception as e:

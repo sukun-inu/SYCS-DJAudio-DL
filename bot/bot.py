@@ -19,7 +19,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cache import register_file, cache_cleanup_loop
+from cache import register_file, cache_cleanup_loop, update_discord_message
 from isrc_meta import enrich_metadata
 
 # ──────────────────────────────────────────────
@@ -268,7 +268,7 @@ def _get_semaphore() -> asyncio.Semaphore:
 async def on_ready():
     logger.info(f"Bot 起動: {bot.user} (ID: {bot.user.id})")
     logger.info(f"BASE_URL: {BASE_URL} / CACHE_TTL: {CACHE_TTL}s")
-    asyncio.create_task(cache_cleanup_loop(interval=60))
+    asyncio.create_task(cache_cleanup_loop(bot=bot, interval=60))
     try:
         synced = await bot.tree.sync()
         logger.info(f"スラッシュコマンド同期: {len(synced)} 件")
@@ -370,6 +370,7 @@ async def process_url(message: discord.Message, url: str) -> None:
                     raise RuntimeError("MP3 ファイルが生成されませんでした")
 
                 download_links = []
+                tokens = []
                 for mp3 in mp3_files:
                     info_meta = _load_info_json(mp3)
                     if info_meta:
@@ -383,6 +384,7 @@ async def process_url(message: discord.Message, url: str) -> None:
                     )
                     link = f"{BASE_URL}/files/{message.guild.id}/{token}"
                     download_links.append((title_text, link))
+                    tokens.append(token)
 
         await message.remove_reaction("⏳", bot.user)
         await message.add_reaction("✅")
@@ -400,7 +402,9 @@ async def process_url(message: discord.Message, url: str) -> None:
                 inline=False,
             )
         embed.set_footer(text=f"リクエスト: {message.author.display_name}")
-        await message.reply(embed=embed, mention_author=False)
+        reply_msg = await message.reply(embed=embed, mention_author=False)
+        for token in tokens:
+            update_discord_message(token, reply_msg.channel.id, reply_msg.id)
         logger.info(f"完了 guild={message.guild.id} [{message.author}]: {len(download_links)} ファイル")
 
     except asyncio.TimeoutError:
